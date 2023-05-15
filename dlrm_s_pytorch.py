@@ -456,8 +456,8 @@ class DLRM_Net(nn.Module):
                     per_sample_weights=per_sample_weights,
                 )
 
-                #ly.append(V)
-                ly.append(V.reshape(-1,1))
+                ly.append(V)
+                
 
 
         # print(ly)
