@@ -90,7 +90,17 @@ from torch.nn.parallel.scatter_gather import gather, scatter
 from torch.nn.parameter import Parameter
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.tensorboard import SummaryWriter
-
+# import fbgemm
+import fbgemm_gpu
+from fbgemm_gpu import split_table_batched_embeddings_ops
+from fbgemm_gpu.split_table_batched_embeddings_ops import (
+        CacheAlgorithm,
+        PoolingMode,
+        OptimType,
+        SparseType,
+        SplitTableBatchedEmbeddingBagsCodegen,
+        IntNBitTableBatchedEmbeddingBagsCodegen,
+    )
 # mixed-dimension trick
 from tricks.md_embedding_bag import md_solver, PrEmbeddingBag
 
@@ -262,14 +272,15 @@ class DLRM_Net(nn.Module):
                 ).astype(np.float32)
                 EE.embs.weight.data = torch.tensor(W, requires_grad=True)
             else:
-                EE = nn.EmbeddingBag(n, m, mode="sum", sparse=True)
+                emb_location = split_table_batched_embeddings_ops.EmbeddingLocation.DEVICE
+                compute_device = split_table_batched_embeddings_ops.ComputeDevice.CUDA
+                pooling_mode = PoolingMode.SUM
+                EE = SplitTableBatchedEmbeddingBagsCodegen(embedding_specs=[(n,m,emb_location,compute_device)],pooling_mode=pooling_mode)
                 # initialize embeddings
                 # nn.init.uniform_(EE.weight, a=-np.sqrt(1 / n), b=np.sqrt(1 / n))
-                W = np.random.uniform(
-                    low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
-                ).astype(np.float32)
+                W = EE.split_embedding_weights()
                 # approach 1
-                EE.weight.data = torch.tensor(W, requires_grad=True)
+                EE.init_embedding_weights_uniform(-1, 1)
                 # approach 2
                 # EE.weight.data.copy_(torch.tensor(W))
                 # approach 3
@@ -445,7 +456,9 @@ class DLRM_Net(nn.Module):
                     per_sample_weights=per_sample_weights,
                 )
 
-                ly.append(V)
+                #ly.append(V)
+                ly.append(V.reshape(-1,1))
+
 
         # print(ly)
         return ly
