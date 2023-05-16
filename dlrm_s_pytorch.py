@@ -275,6 +275,8 @@ class DLRM_Net(nn.Module):
                 emb_location = split_table_batched_embeddings_ops.EmbeddingLocation.DEVICE
                 compute_device = split_table_batched_embeddings_ops.ComputeDevice.CUDA
                 pooling_mode = PoolingMode.SUM
+                print("m= " + m);
+                print("n=" + n);
                 EE = SplitTableBatchedEmbeddingBagsCodegen(embedding_specs=[(n,m,emb_location,compute_device)],pooling_mode=pooling_mode)
                 # initialize embeddings
                 # nn.init.uniform_(EE.weight, a=-np.sqrt(1 / n), b=np.sqrt(1 / n))
@@ -455,7 +457,8 @@ class DLRM_Net(nn.Module):
                     sparse_offset_group_batch,
                     per_sample_weights=per_sample_weights,
                 )
-
+                temp = torch.ones(1,16,device = 'cuda')
+                V= torch.cat((V,temp),0)
                 ly.append(V)
                 
 
