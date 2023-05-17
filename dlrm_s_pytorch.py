@@ -90,6 +90,9 @@ from torch.nn.parallel.scatter_gather import gather, scatter
 from torch.nn.parameter import Parameter
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.tensorboard import SummaryWriter
+
+# mixed-dimension trick
+from tricks.md_embedding_bag import md_solver, PrEmbeddingBag
 # import fbgemm
 import fbgemm_gpu
 from fbgemm_gpu import split_table_batched_embeddings_ops
@@ -101,9 +104,6 @@ from fbgemm_gpu.split_table_batched_embeddings_ops import (
         SplitTableBatchedEmbeddingBagsCodegen,
         IntNBitTableBatchedEmbeddingBagsCodegen,
     )
-# mixed-dimension trick
-from tricks.md_embedding_bag import md_solver, PrEmbeddingBag
-
 # quotient-remainder trick
 from tricks.qr_embedding_bag import QREmbeddingBag
 
@@ -243,7 +243,7 @@ class DLRM_Net(nn.Module):
         # approach 2: use Sequential container to wrap all layers
         return torch.nn.Sequential(*layers)
 
-    def create_emb(self, m, ln, weighted_pooling=None):
+    def create_emb(self, m, ln,weighted_pooling=None):
         emb_l = nn.ModuleList()
         v_W_l = []
         for i in range(0, ln.size):
@@ -272,17 +272,17 @@ class DLRM_Net(nn.Module):
                 ).astype(np.float32)
                 EE.embs.weight.data = torch.tensor(W, requires_grad=True)
             else:
-                emb_location = split_table_batched_embeddings_ops.EmbeddingLocation.DEVICE
-                compute_device = split_table_batched_embeddings_ops.ComputeDevice.CUDA
-                pooling_mode = PoolingMode.SUM
-                print("m= " + m);
-                print("n=" + n);
-                EE = SplitTableBatchedEmbeddingBagsCodegen(embedding_specs=[(n,m,emb_location,compute_device)],pooling_mode=pooling_mode)
+                EE = nn.EmbeddingBag(n, m, mode="sum", sparse=True)
                 # initialize embeddings
                 # nn.init.uniform_(EE.weight, a=-np.sqrt(1 / n), b=np.sqrt(1 / n))
-                W = EE.split_embedding_weights()
+                W = np.random.uniform(
+                    low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
+                ).astype(np.float32)
                 # approach 1
-                EE.init_embedding_weights_uniform(-1, 1)
+                EE.weight.data = torch.tensor(W, requires_grad=True)         
+            
+                # approach 1
+                #EE.init_embedding_weights_uniform(-1, 1)
                 # approach 2
                 # EE.weight.data.copy_(torch.tensor(W))
                 # approach 3
@@ -291,7 +291,36 @@ class DLRM_Net(nn.Module):
                 v_W_l.append(None)
             else:
                 v_W_l.append(torch.ones(n, dtype=torch.float32))
-            emb_l.append(EE)
+                
+            
+            #print("use_fbgemm = ", self.use_fbgemm)   
+            if self.use_fbgemm:
+                #print("use_fbgemm = ", self.use_fbgemm)
+                emb_location = split_table_batched_embeddings_ops.EmbeddingLocation.DEVICE
+                compute_device = split_table_batched_embeddings_ops.ComputeDevice.CUDA
+                pooling_mode = PoolingMode.SUM
+                #print("n = ",n)
+                #print("m = ",m)
+                fbgemm_gpu_emb_bag = SplitTableBatchedEmbeddingBagsCodegen(
+                    embedding_specs=[
+                    (
+                        n,  # num of rows in the table
+                        m,  # num of columns in the table
+                        emb_location,
+                        compute_device,
+                    )
+                ], pooling_mode=pooling_mode)
+
+                weights = fbgemm_gpu_emb_bag.split_embedding_weights()
+                
+                weights[0].data.copy_(EE.weight)
+                emb_l.append(fbgemm_gpu_emb_bag)
+            else:
+                #print(EE)
+                emb_l.append(EE)
+        
+           
+        #print("vwl =",v_W_l )
         return emb_l, v_W_l
 
     def __init__(
@@ -314,6 +343,7 @@ class DLRM_Net(nn.Module):
         md_flag=False,
         md_threshold=200,
         weighted_pooling=None,
+        use_fbgemm=False,
         loss_function="bce",
     ):
         super(DLRM_Net, self).__init__()
@@ -336,6 +366,7 @@ class DLRM_Net(nn.Module):
             self.sync_dense_params = sync_dense_params
             self.loss_threshold = loss_threshold
             self.loss_function = loss_function
+            self.use_fbgemm = use_fbgemm
             if weighted_pooling is not None and weighted_pooling != "fixed":
                 self.weighted_pooling = "learned"
             else:
@@ -368,6 +399,7 @@ class DLRM_Net(nn.Module):
 
             # create operators
             if ndevices <= 1:
+                print("ndevices<=1")
                 self.emb_l, w_list = self.create_emb(m_spa, ln_emb, weighted_pooling)
                 if self.weighted_pooling == "learned":
                     self.v_W_l = nn.ParameterList()
@@ -415,9 +447,15 @@ class DLRM_Net(nn.Module):
         # 3. for a list of embedding tables there is a list of batched lookups
 
         ly = []
+        #print("ls_i= ",len(lS_i))
         for k, sparse_index_group_batch in enumerate(lS_i):
+            
             sparse_offset_group_batch = lS_o[k]
-
+            #print("sparse_offset_group_batch size is " , sparse_offset_group_batch.size()[0])
+            if(self.use_fbgemm):
+                sparse_offset_group_batch =torch.cat((sparse_offset_group_batch,torch.tensor([sparse_offset_group_batch.size()[0]],device = 'cuda' )),0)
+            #print("sparse_offset_group_batch =", sparse_offset_group_batch)
+            #print("sparse_index_group_batch =", sparse_index_group_batch)
             # embedding lookup
             # We are using EmbeddingBag, which implicitly uses sum operator.
             # The embeddings are represented as tall matrices, with sum
@@ -452,18 +490,17 @@ class DLRM_Net(nn.Module):
                 ly.append(QV)
             else:
                 E = emb_l[k]
+                #print("sparse_index_group_batch shape is ",sparse_index_group_batch.shape)
+                #print("sparse_offset_group_batch shape is ",sparse_offset_group_batch.shape)
+                #print("per_sample_weights shape is ",per_sample_weights.shape)
                 V = E(
                     sparse_index_group_batch,
                     sparse_offset_group_batch,
                     per_sample_weights=per_sample_weights,
                 )
-                temp = torch.ones(1,16,device = 'cuda')
-                V= torch.cat((V,temp),0)
                 ly.append(V)
-                
-
-
-        # print(ly)
+        #print(V.shape)        
+        #print(ly)
         return ly
 
     #  using quantizing functions from caffe2/aten/src/ATen/native/quantized/cpu
@@ -1024,6 +1061,9 @@ def run():
     parser.add_argument("--lr-decay-start-step", type=int, default=0)
     parser.add_argument("--lr-num-decay-steps", type=int, default=0)
 
+    #use FBGEMM
+    parser.add_argument("--use-fbgemm", action="store_true", default=False)
+
     global args
     global nbatches
     global nbatches_test
@@ -1144,7 +1184,7 @@ def run():
     m_spa = args.arch_sparse_feature_size
     ln_emb = np.asarray(ln_emb)
     num_fea = ln_emb.size + 1  # num sparse + num dense features
-
+    use_fbgemm = args.use_fbgemm
     m_den_out = ln_bot[ln_bot.size - 1]
     if args.arch_interaction_op == "dot":
         # approach 1: all
@@ -1297,6 +1337,7 @@ def run():
         md_flag=args.md_flag,
         md_threshold=args.md_threshold,
         weighted_pooling=args.weighted_pooling,
+        use_fbgemm = use_fbgemm,
         loss_function=args.loss_function,
     )
 
@@ -1314,7 +1355,7 @@ def run():
         dlrm = dlrm.to(device)  # .cuda()
         if dlrm.ndevices > 1:
             dlrm.emb_l, dlrm.v_W_l = dlrm.create_emb(
-                m_spa, ln_emb, args.weighted_pooling
+                m_spa, ln_emb,args.weighted_pooling,
             )
         else:
             if dlrm.weighted_pooling == "fixed":
@@ -1507,7 +1548,7 @@ def run():
 
     ext_dist.barrier()
     with torch.autograd.profiler.profile(
-        args.enable_profiling, use_cuda=use_gpu, record_shapes=True
+        args.enable_profiling, use_cuda=use_gpu, record_shapes=True, use_cpu = False, use_kineto = True
     ) as prof:
         if not args.inference_only:
             k = 0
@@ -1556,7 +1597,9 @@ def run():
                     # early exit if nbatches was set by the user and has been exceeded
                     if nbatches > 0 and j >= nbatches:
                         break
-
+                    #if j>10:
+                        #print('early stop at 10 ite')
+                        #break
                     # Skip the batch if batch size not multiple of total ranks
                     if ext_dist.my_size > 1 and X.size(0) % ext_dist.my_size != 0:
                         print(
