@@ -93,6 +93,9 @@ from torch.utils.tensorboard import SummaryWriter
 
 # mixed-dimension trick
 from tricks.md_embedding_bag import md_solver, PrEmbeddingBag
+# quotient-remainder trick
+from tricks.qr_embedding_bag import QREmbeddingBag
+
 # import fbgemm
 import fbgemm_gpu
 from fbgemm_gpu import split_table_batched_embeddings_ops
@@ -104,8 +107,6 @@ from fbgemm_gpu.split_table_batched_embeddings_ops import (
         SplitTableBatchedEmbeddingBagsCodegen,
         IntNBitTableBatchedEmbeddingBagsCodegen,
     )
-# quotient-remainder trick
-from tricks.qr_embedding_bag import QREmbeddingBag
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -243,7 +244,7 @@ class DLRM_Net(nn.Module):
         # approach 2: use Sequential container to wrap all layers
         return torch.nn.Sequential(*layers)
 
-    def create_emb(self, m, ln,weighted_pooling=None):
+    def create_emb(self, m, ln, weighted_pooling=None):
         emb_l = nn.ModuleList()
         v_W_l = []
         for i in range(0, ln.size):
@@ -399,7 +400,6 @@ class DLRM_Net(nn.Module):
 
             # create operators
             if ndevices <= 1:
-                print("ndevices<=1")
                 self.emb_l, w_list = self.create_emb(m_spa, ln_emb, weighted_pooling)
                 if self.weighted_pooling == "learned":
                     self.v_W_l = nn.ParameterList()
@@ -1060,7 +1060,6 @@ def run():
     parser.add_argument("--lr-num-warmup-steps", type=int, default=0)
     parser.add_argument("--lr-decay-start-step", type=int, default=0)
     parser.add_argument("--lr-num-decay-steps", type=int, default=0)
-
     #use FBGEMM
     parser.add_argument("--use-fbgemm", action="store_true", default=False)
 
@@ -1355,7 +1354,7 @@ def run():
         dlrm = dlrm.to(device)  # .cuda()
         if dlrm.ndevices > 1:
             dlrm.emb_l, dlrm.v_W_l = dlrm.create_emb(
-                m_spa, ln_emb,args.weighted_pooling,
+                m_spa, ln_emb, args.weighted_pooling
             )
         else:
             if dlrm.weighted_pooling == "fixed":
@@ -1548,7 +1547,7 @@ def run():
 
     ext_dist.barrier()
     with torch.autograd.profiler.profile(
-        args.enable_profiling, use_cuda=use_gpu, record_shapes=True, use_cpu = False, use_kineto = True
+        args.enable_profiling, use_cuda=use_gpu, record_shapes=True
     ) as prof:
         if not args.inference_only:
             k = 0
