@@ -101,12 +101,8 @@ from tricks.qr_embedding_bag import QREmbeddingBag
 import fbgemm_gpu
 from fbgemm_gpu import split_table_batched_embeddings_ops
 from fbgemm_gpu.split_table_batched_embeddings_ops import (
-        CacheAlgorithm,
         PoolingMode,
-        OptimType,
-        SparseType,
         SplitTableBatchedEmbeddingBagsCodegen,
-        IntNBitTableBatchedEmbeddingBagsCodegen,
     )
 
 with warnings.catch_warnings():
