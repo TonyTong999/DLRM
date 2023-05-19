@@ -291,8 +291,12 @@ class DLRM_Net(nn.Module):
             #print("use_fbgemm = ", self.use_fbgemm)   
             if self.use_fbgemm:
                 #print("use_fbgemm = ", self.use_fbgemm)
-                emb_location = split_table_batched_embeddings_ops.EmbeddingLocation.DEVICE
-                compute_device = split_table_batched_embeddings_ops.ComputeDevice.CUDA
+                if(args.use_gpu):
+                    emb_location = split_table_batched_embeddings_ops.EmbeddingLocation.DEVICE
+                    compute_device = split_table_batched_embeddings_ops.ComputeDevice.CUDA
+                else:
+                    emb_location = split_table_batched_embeddings_ops.EmbeddingLocation.HOST
+                    compute_device = split_table_batched_embeddings_ops.ComputeDevice.CPU
                 pooling_mode = PoolingMode.SUM
                 #print("n = ",n)
                 #print("m = ",m)
@@ -447,7 +451,11 @@ class DLRM_Net(nn.Module):
             sparse_offset_group_batch = lS_o[k]
             #print("sparse_offset_group_batch size is " , sparse_offset_group_batch.size()[0])
             if(self.use_fbgemm):
-                sparse_offset_group_batch =torch.cat((sparse_offset_group_batch,torch.tensor([sparse_offset_group_batch.size()[0]],device = 'cuda' )),0)
+                if(args.use_gpu):
+                    sparse_offset_group_batch =torch.cat((sparse_offset_group_batch,torch.tensor([sparse_offset_group_batch.size()[0]],device = 'cuda' )),0)
+                else:
+                    sparse_offset_group_batch =torch.cat((sparse_offset_group_batch,torch.tensor([sparse_offset_group_batch.size()[0]])),0)
+
             #print("sparse_offset_group_batch =", sparse_offset_group_batch)
             #print("sparse_index_group_batch =", sparse_index_group_batch)
             # embedding lookup
