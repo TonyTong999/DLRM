@@ -93,6 +93,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 # mixed-dimension trick
 from tricks.md_embedding_bag import md_solver, PrEmbeddingBag
+
 # quotient-remainder trick
 from tricks.qr_embedding_bag import QREmbeddingBag
 
@@ -281,9 +282,6 @@ class DLRM_Net(nn.Module):
                 ).astype(np.float32)
                 # approach 1
                 EE.weight.data = torch.tensor(W, requires_grad=True)         
-            
-                # approach 1
-                #EE.init_embedding_weights_uniform(-1, 1)
                 # approach 2
                 # EE.weight.data.copy_(torch.tensor(W))
                 # approach 3
